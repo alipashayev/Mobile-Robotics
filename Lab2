@@ -1,0 +1,82 @@
+#!/usr/bin/env pybricks-micropython
+from pybricks.hubs import EV3Brick
+from pybricks.ev3devices import (Motor, TouchSensor, ColorSensor,
+                                 InfraredSensor, UltrasonicSensor, GyroSensor)
+from pybricks.parameters import Port, Stop, Direction, Button, Color
+from pybricks.tools import wait, StopWatch, DataLog
+from pybricks.robotics import DriveBase
+from pybricks.media.ev3dev import SoundFile, ImageFile
+
+
+# This program requires LEGO EV3 MicroPython v2.0 or higher.
+# Click "Open user guide" on the EV3 extension tab for more information.
+
+
+# Create your objects here.
+ev3 = EV3Brick()
+left = Motor(Port.B)
+right = Motor(Port.C)
+cs = ColorSensor(Port.S3)
+cs1 = ColorSensor(Port.S4)
+gyro = GyroSensor(Port.S2)
+speed = 200
+counter = 0 
+check = False
+LOW  = (1,1,1)
+HIGH = (24,50,60)
+
+LOW_GRAY = (10,10,30)
+HIGH_GRAY = (20,30,60)
+
+
+# Write your program here.
+wait(300)
+gyro.reset_angle(0)
+while True:
+    r, g, b = cs.rgb()
+    r1, g1, b1 = cs1.rgb()
+
+    sensor1 = LOW[0] <= r <= HIGH[0] and LOW[1] <= g <= HIGH[1] and LOW[2] <= b <= HIGH[2]
+    sensor2 = LOW[0] <= r1 <= HIGH[0] and LOW[1] <= g1 <= HIGH[1] and LOW[2] <= b1 <= HIGH[2]
+    sensor1_gray = LOW_GRAY[0] <= r <= HIGH_GRAY[0] and LOW_GRAY[1] <= g <= HIGH_GRAY[1] and LOW_GRAY[2] <= b <= HIGH_GRAY[2]
+    sensor2_gray = LOW_GRAY[0] <= r1 <= HIGH_GRAY[0] and LOW_GRAY[1] <= g1 <= HIGH_GRAY[1] and LOW_GRAY[2] <= b1 <= HIGH_GRAY[2]
+
+    print("RGB:", r, g, b)  
+    print("RGB2: ", r1,g1,b1)
+
+    if sensor1 == True and sensor2 == True and counter != 2:
+        gyro.reset_angle(0)
+        left.run(speed-150)
+        right.run(speed)
+        left.run(speed)
+        right.run(speed-150)
+        print("go straight")
+
+    if sensor1 == True and sensor2 == False and counter != 2:
+        left.run(0)
+        right.run(speed)
+
+    if sensor1 == False and sensor2 == True and counter != 2:
+        left.run(speed)
+        right.run(0)
+    
+    if sensor1_gray == True and sensor2_gray == True:
+        counter = counter+1
+
+
+    if counter == 1 and check== False:
+        while gyro.angle()<345:
+            left.run(100)
+            right.run(-100)
+            check = True
+            print("Gyro: ", gyro.angle())
+        if gyro.angle() > 344:
+            left.run_angle(speed, 70, Stop.HOLD, False)
+            right.run_angle(speed, 70, Stop.HOLD, True)
+            gyro.reset_angle(0)
+
+    if counter == 2:
+        left.stop(Stop.BRAKE)
+        right.stop(Stop.BRAKE)
+        break   
+
