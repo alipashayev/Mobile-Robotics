@@ -1,0 +1,83 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Configuration - adjust these based on your robot
+WHEEL_DIAMETER = 56  # mm (adjust to your wheel size)
+WHEEL_BASE = 115     # mm (distance between wheels, adjust to your robot)
+
+# Load the data
+df = pd.read_csv('log_001.csv')  # Change filename as needed
+df.columns = df.columns.str.strip()
+print(f"Loaded {len(df)} data points")
+print(df.head())
+
+# Calculate wheel distances traveled
+wheel_circumference = np.pi * WHEEL_DIAMETER
+left_distance = (df['left_angle'] / 360) * wheel_circumference
+right_distance = (df['right_angle'] / 360) * wheel_circumference
+
+# Calculate robot position using differential drive kinematics
+x = [0]
+y = [0]
+theta = 0  # Initial heading in radians
+
+for i in range(1, len(df)):
+    # Distance traveled by each wheel since last reading
+    dl = left_distance.iloc[i] - left_distance.iloc[i-1]
+    dr = right_distance.iloc[i] - right_distance.iloc[i-1]
+    
+    # Calculate change in position
+    dc = (dl + dr) / 2  # Distance traveled by center
+    dtheta = (dr - dl) / WHEEL_BASE  # Change in heading
+    
+    # Update heading
+    theta += dtheta
+    
+    # Update position
+    x.append(x[-1] + dc * np.cos(theta))
+    y.append(y[-1] + dc * np.sin(theta))
+
+# Create visualization
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+# Plot 1: Track path with color gradient showing time progression
+scatter = ax1.scatter(x, y, c=df['time'], cmap='viridis', s=2, alpha=0.6)
+ax1.plot(x, y, 'b-', alpha=0.3, linewidth=0.5)
+ax1.set_xlabel('X Position (mm)')
+ax1.set_ylabel('Y Position (mm)')
+ax1.set_title('Robot Track Path')
+ax1.axis('equal')
+ax1.grid(True, alpha=0.3)
+cbar = plt.colorbar(scatter, ax=ax1)
+cbar.set_label('Time (ms)')
+
+# Mark start and end points
+ax1.plot(x[0], y[0], 'go', markersize=10, label='Start')
+ax1.plot(x[-1], y[-1], 'ro', markersize=10, label='End')
+ax1.legend()
+
+# Plot 2: Gyro angle over time
+ax2.plot(df['time'] / 1000, df['gyro_angle'], 'r-', linewidth=1)
+ax2.set_xlabel('Time (s)')
+ax2.set_ylabel('Gyro Angle (degrees)')
+ax2.set_title('Robot Heading Over Time')
+ax2.grid(True, alpha=0.3)
+
+# Highlight the turn at counter=1
+turn_data = df[df['counter'] == 1]
+if not turn_data.empty:
+    ax2.axvspan(turn_data['time'].min() / 1000, 
+                turn_data['time'].max() / 1000, 
+                alpha=0.3, color='yellow', label='Turn at gray line')
+    ax2.legend()
+
+plt.tight_layout()
+plt.savefig('robot_track.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+print(f"\nTrack statistics:")
+print(f"Total distance traveled: {sum([np.sqrt((x[i]-x[i-1])**2 + (y[i]-y[i-1])**2) for i in range(1, len(x))]):.2f} mm")
+print(f"Total time: {df['time'].iloc[-1] / 1000:.2f} seconds")
+print(f"Max X: {max(x):.2f} mm, Min X: {min(x):.2f} mm")
+print(f"Max Y: {max(y):.2f} mm, Min Y: {min(y):.2f} mm")
