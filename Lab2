@@ -19,9 +19,14 @@ right = Motor(Port.C)
 cs = ColorSensor(Port.S3)
 cs1 = ColorSensor(Port.S4)
 gyro = GyroSensor(Port.S2)
-speed = 200
+speed = 400
 counter = 0 
 check = False
+turn = False
+check1 = True
+check2 = False
+check3 = False
+check4 = False
 LOW  = (1,1,1)
 HIGH = (24,50,60)
 
