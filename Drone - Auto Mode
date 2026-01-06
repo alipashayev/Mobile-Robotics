@@ -1,0 +1,210 @@
+from djitellopy import Tello
+import cv2
+import time
+import threading
+
+
+class TelloPatrol:
+    def __init__(self):
+        self.tello = Tello()
+        self.frame_read = None
+
+        # Motion detection parameters
+        self.frame_size = (480, 360)
+        self.min_motion_pixels = 4500
+        self.required_hits = 4
+
+        self.bg = cv2.createBackgroundSubtractorMOG2(
+            history=200, varThreshold=32, detectShadows=False
+        )
+
+        # State
+        self.running = True
+        self.is_moving = False
+        self.last_motion_state = None  # None / True / False
+
+        # Keepalive
+        self.keepalive_interval = 3.0
+        self._stop_event = threading.Event()
+        self._keepalive_thread = None
+
+    def connect(self):
+        self.tello.connect()
+
+        if self.tello.get_battery() < 20:
+            return False
+
+        self.tello.streamon()
+        time.sleep(1)
+        self.frame_read = self.tello.get_frame_read()
+
+        for _ in range(60):
+            if self.frame_read.frame is not None:
+                return True
+            time.sleep(0.05)
+
+        return False
+
+    def _keepalive_loop(self):
+        while not self._stop_event.is_set():
+            try:
+                self.tello.send_command_without_return("command")
+            except:
+                pass
+            self._stop_event.wait(self.keepalive_interval)
+
+    def start_keepalive(self):
+        self._stop_event.clear()
+        self._keepalive_thread = threading.Thread(
+            target=self._keepalive_loop, daemon=True
+        )
+        self._keepalive_thread.start()
+
+    def stop_keepalive(self):
+        self._stop_event.set()
+
+    def safe_command(self, cmd, *args, wait=1.2):
+        self.is_moving = True
+        try:
+            cmd(*args)
+            time.sleep(wait)
+            return True
+        except:
+            return False
+        finally:
+            self.is_moving = False
+
+    def stabilize(self, seconds=2.0):
+        end = time.time() + seconds
+        while time.time() < end:
+            _ = self.frame_read.frame
+            time.sleep(0.08)
+
+        # Reset detector after movement
+        self.bg = cv2.createBackgroundSubtractorMOG2(
+            history=200, varThreshold=32, detectShadows=False
+        )
+
+        for _ in range(10):
+            frame = self.get_frame()
+            if frame is not None:
+                gray = self.preprocess(frame)
+                self.bg.apply(gray, learningRate=0.6)
+            time.sleep(0.05)
+
+    def get_frame(self):
+        frame = self.frame_read.frame
+        if frame is None or frame.size == 0:
+            return None
+        return cv2.resize(frame, self.frame_size)
+
+    def preprocess(self, frame):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        return cv2.GaussianBlur(gray, (7, 7), 0)
+
+    def detect_motion(self, timeout=2.5):
+        if self.is_moving:
+            return False
+
+        start = time.time()
+        hits = 0
+
+        while time.time() - start < timeout and self.running:
+            frame = self.get_frame()
+            if frame is None:
+                time.sleep(0.05)
+                continue
+
+            gray = self.preprocess(frame)
+            mask = self.bg.apply(gray, learningRate=0.02)
+            mask = cv2.threshold(mask, 200, 255, cv2.THRESH_BINARY)[1]
+            mask = cv2.medianBlur(mask, 5)
+
+            motion_pixels = cv2.countNonZero(mask)
+
+            if motion_pixels > self.min_motion_pixels:
+                hits += 1
+            else:
+                hits = 0
+
+            motion = hits >= self.required_hits
+
+            # Print ONLY when state changes
+            if motion != self.last_motion_state:
+                if motion:
+                    print("Checking for motion: 🚨 MOTION DETECTED")
+                else:
+                    print("Checking for motion: ✅ NO MOTION")
+                self.last_motion_state = motion
+
+            if motion:
+                return True
+
+            time.sleep(0.05)
+
+        return False
+
+    def patrol_square_once(self):
+        self.stabilize()
+        self.detect_motion()
+
+        self.safe_command(self.tello.move_forward, 200)
+
+        self.stabilize()
+        self.detect_motion()
+
+        self.safe_command(self.tello.move_right, 200)
+
+        self.stabilize()
+        self.detect_motion()
+
+        self.safe_command(self.tello.move_back, 200)
+
+        self.stabilize()
+        self.detect_motion()
+
+        self.safe_command(self.tello.move_left, 200)
+
+    def run(self):
+        self.start_keepalive()
+        self.tello.takeoff()
+        self.stabilize(3.0)
+
+        while self.running:
+            self.patrol_square_once()
+            self.stabilize(2.0)
+
+    def cleanup(self):
+        self.stop_keepalive()
+        try:
+            self.tello.streamoff()
+        except:
+            pass
+        try:
+            self.tello.end()
+        except:
+            pass
+
+
+def main():
+    patrol = TelloPatrol()
+
+    try:
+        if not patrol.connect():
+            return
+
+        time.sleep(3)
+        patrol.run()
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try:
+            patrol.tello.land()
+        except:
+            pass
+        patrol.cleanup()
+
+
+if __name__ == "__main__":
+    main()
