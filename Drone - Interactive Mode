@@ -1,0 +1,180 @@
+
+from djitellopy import Tello
+import cv2
+import time
+import mediapipe as mp
+import threading
+
+
+class TelloHandControl:
+    def __init__(self):
+        self.tello = Tello()
+        self.frame_read = None
+
+        # MediaPipe (lighter config)
+        self.mp_hands = mp.solutions.hands
+        self.hands = self.mp_hands.Hands(
+            max_num_hands=1,
+            min_detection_confidence=0.7,
+            min_tracking_confidence=0.6
+        )
+
+        # State
+        self.running = True
+        self.executing = False
+        self.last_action_time = 0
+        self.cooldown = 2.5
+
+        # Frame throttling (VERY IMPORTANT)
+        self.process_every_n_frames = 5
+        self.frame_counter = 0
+
+        # Keepalive
+        self.keepalive_interval = 3.0
+        self._stop_event = threading.Event()
+
+    def connect(self):
+        self.tello.connect()
+        if self.tello.get_battery() < 20:
+            return False
+
+        self.tello.streamon()
+        time.sleep(1)
+        self.frame_read = self.tello.get_frame_read()
+
+        for _ in range(60):
+            if self.frame_read.frame is not None:
+                return True
+            time.sleep(0.05)
+        return False
+
+    def _keepalive_loop(self):
+        while not self._stop_event.is_set():
+            try:
+                self.tello.send_command_without_return("command")
+            except:
+                pass
+            time.sleep(self.keepalive_interval)
+
+    def start_keepalive(self):
+        threading.Thread(target=self._keepalive_loop, daemon=True).start()
+
+    def count_fingers(self, lm):
+        fingers = []
+        fingers.append(lm.landmark[4].x < lm.landmark[3].x)  # thumb
+
+        tips = [8, 12, 16, 20]
+        pips = [6, 10, 14, 18]
+        for t, p in zip(tips, pips):
+            fingers.append(lm.landmark[t].y < lm.landmark[p].y)
+
+        return sum(fingers)
+
+    def gesture_from_count(self, count):
+        if count == 2:
+            return "FORWARD"
+        if count == 1:
+            return "BACK"
+        if count == 5:
+            return "RIGHT"
+        if count == 0:
+            return "LEFT"
+        return None
+
+    def execute(self, gesture):
+        now = time.time()
+        if self.executing or now - self.last_action_time < self.cooldown:
+            return
+
+        self.executing = True
+        self.last_action_time = now
+
+        print(f"\n✋ Gesture captured: {gesture}")
+
+        try:
+            if gesture == "FORWARD":
+                print("🚀 Moving FORWARD 2 meters")
+                self.tello.move_forward(200)
+
+            elif gesture == "BACK":
+                print("⬇️ Moving BACKWARD 2 meters")
+                self.tello.move_back(200)
+
+            elif gesture == "RIGHT":
+                print("➡️ Moving RIGHT 2 meters")
+                self.tello.move_right(200)
+
+            elif gesture == "LEFT":
+                print("⬅️ Moving LEFT 2 meters")
+                self.tello.move_left(200)
+
+            time.sleep(1.2)
+
+        finally:
+            self.executing = False
+            print("👀 Waiting for next hand gesture...\n")
+
+    def run(self):
+        self.start_keepalive()
+        self.tello.takeoff()
+        time.sleep(3)
+
+        print("\n👀 Waiting for hand gesture:")
+        print("✌️  2 fingers → MOVE FORWARD 2m")
+        print("☝️  1 finger  → MOVE BACK 2m")
+        print("🖐️  5 fingers → MOVE RIGHT 2m")
+        print("✊  0 fingers → MOVE LEFT 2m\n")
+
+        try:
+            while self.running:
+                frame = self.frame_read.frame
+                if frame is None:
+                    time.sleep(0.03)
+                    continue
+
+                self.frame_counter += 1
+                if self.frame_counter % self.process_every_n_frames != 0:
+                    continue
+
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                result = self.hands.process(rgb)
+
+                if result.multi_hand_landmarks and not self.executing:
+                    lm = result.multi_hand_landmarks[0]
+                    count = self.count_fingers(lm)
+                    gesture = self.gesture_from_count(count)
+
+                    if gesture:
+                        self.execute(gesture)
+
+                time.sleep(0.03)
+
+        except KeyboardInterrupt:
+            pass
+
+    def cleanup(self):
+        self._stop_event.set()
+        try:
+            self.tello.land()
+        except:
+            pass
+        try:
+            self.tello.streamoff()
+            self.tello.end()
+        except:
+            pass
+
+
+def main():
+    control = TelloHandControl()
+    if not control.connect():
+        return
+
+    try:
+        control.run()
+    finally:
+        control.cleanup()
+
+
+if __name__ == "__main__":
+    main()
